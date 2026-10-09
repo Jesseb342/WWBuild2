@@ -7,6 +7,10 @@ on:
         description: "Stop the build after this many minutes (15 = test, 320 = real)"
         default: "15"
         required: true
+      iso_only:
+        description: "Only convert and upload the ISO (skip the build)"
+        type: boolean
+        default: false
 
 jobs:
   build:
@@ -65,10 +69,22 @@ jobs:
           ls -lh WindWaker.iso
           file WindWaker.iso
 
+      - name: Upload ISO
+        if: ${{ inputs.iso_only }}
+        uses: actions/upload-artifact@v4
+        with:
+          name: WindWaker-ISO
+          path: ${{ runner.temp }}/wind-waker/WindWaker.iso
+          if-no-files-found: error
+          compression-level: 0
+          retention-days: 1
+
       - name: Install build tools
+        if: ${{ !inputs.iso_only }}
         run: brew install cmake ninja || true
 
       - name: Restore build cache
+        if: ${{ !inputs.iso_only }}
         id: cache
         uses: actions/cache/restore@v4
         with:
@@ -78,6 +94,7 @@ jobs:
             bw-build-
 
       - name: Cache status
+        if: ${{ !inputs.iso_only }}
         run: |
           echo "Exact hit: ${{ steps.cache.outputs.cache-hit }}"
           echo "Matched key: '${{ steps.cache.outputs.cache-matched-key }}'"
@@ -88,7 +105,7 @@ jobs:
           fi
 
       - name: Clone BlueWake
-        if: steps.cache.outputs.cache-matched-key == ''
+        if: ${{ !inputs.iso_only && steps.cache.outputs.cache-matched-key == '' }}
         run: |
           set -euo pipefail
           git clone --depth 1 \
@@ -96,11 +113,13 @@ jobs:
             "$RUNNER_TEMP/bluewake"
 
       - name: Show BlueWake commit
+        if: ${{ !inputs.iso_only }}
         run: |
           cd "$RUNNER_TEMP/bluewake"
           git log -1 --format='%H %s'
 
       - name: Build IPA (with watchdog)
+        if: ${{ !inputs.iso_only }}
         id: build
         env:
           LIMIT_MIN: ${{ inputs.minutes }}
@@ -152,7 +171,7 @@ jobs:
           exit 0
 
       - name: Save build cache
-        if: always()
+        if: ${{ always() && !inputs.iso_only }}
         uses: actions/cache/save@v4
         with:
           path: ${{ runner.temp }}/bluewake
@@ -172,5 +191,4 @@ jobs:
           name: BlueWake-iOS
           path: ${{ runner.temp }}/BlueWake.ipa
           if-no-files-found: error
-          retention-days: 7
-
+          retention-days: 1
