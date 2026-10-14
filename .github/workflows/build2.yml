@@ -1,76 +1,84 @@
-# .github/workflows/build-conker-recomp-macos.yml
+# .github/workflows/inspect-repos.yml
 #
-# Milestone 2a: prove the existing community Conker recomp
-# (sciaschi/CBFD-Recompiled) builds on a GitHub macOS runner from your own
-# US ROM. This is a DESKTOP macOS build, not the iOS app: it just shows the
-# decomp -> N64Recomp -> RT64/Metal chain works in CI before we port it to the
-# BananaPad iOS shell.
+# Milestone 2b: gather facts for the Conker iOS port. Clones the two PUBLIC
+# repos on a cheap Linux runner and writes one text report: layouts, patch
+# footprints, pinned submodule versions, and host build files. No ROM needed.
 #
-# UNTESTED. Written from the project's README; expect to tweak.
-#
-# Setup:
-#   -> upload your Conker US ROM to Google Drive (Anyone with the link)
-#      Required SHA-1: 4cbadd3c4e0729dec46af64ad018050eada4f47a
-#   -> the file ID is already filled in below
-#   -> keep this repo PRIVATE
+# Run it, download the "inspection-report" artifact, unzip, and upload
+# inspection.txt to Claude.
 
-name: Build Conker recomp (macOS test)
+name: Inspect BananaPad and CBFD
 
 on:
   workflow_dispatch:
 
 jobs:
-  build:
-    runs-on: macos-15
-    timeout-minutes: 180
+  inspect:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
 
     steps:
-      - name: Select newest stable Xcode
+      - name: Clone BananaPad and CBFD-Recompiled
         run: |
-          XC=$(ls -d /Applications/Xcode_*.app | grep -vi beta | sort -V | tail -1)
-          echo "Using $XC"
-          sudo xcode-select -s "$XC/Contents/Developer"
-          xcodebuild -version
+          git clone --depth 1 https://github.com/chrissotraidis/bananapad bp
+          git clone --depth 1 --recursive --shallow-submodules \
+              https://github.com/sciaschi/CBFD-Recompiled.git cbfd
 
-      - name: Download Metal Toolchain
-        run: xcodebuild -downloadComponent MetalToolchain
-
-      - name: Install build tools
+      - name: Build report
         run: |
-          brew update
-          brew install cmake ninja pkg-config sdl2 freetype jq python@3.11 ripgrep
+          R="$PWD/inspection.txt"
+          sec() { printf '\n\n===== %s =====\n' "$1" >> "$R"; }
 
-      - name: Download ROM from Google Drive
-        env:
-          ROM_DRIVE_ID: 1ZgP1dSW_YGs5EGy-55a0JI-I3-BPw0qR
-        run: |
-          python3 -m venv "$RUNNER_TEMP/venv"
-          "$RUNNER_TEMP/venv/bin/pip" install --quiet gdown
-          "$RUNNER_TEMP/venv/bin/gdown" \
-              "https://drive.google.com/uc?id=$ROM_DRIVE_ID" \
-              -O "$RUNNER_TEMP/conker.z64"
-          ls -l "$RUNNER_TEMP/conker.z64"
-          SHA=$(shasum -a 1 "$RUNNER_TEMP/conker.z64" | cut -d' ' -f1)
-          echo "ROM SHA-1: $SHA"
-          test "$SHA" = "4cbadd3c4e0729dec46af64ad018050eada4f47a"
+          sec "BananaPad commit"
+          (cd bp && git log -1 --format='%H %cd') >> "$R" 2>&1 || true
 
-      - name: Clone CBFD-Recompiled (with submodules)
-        run: |
-          git clone --recursive https://github.com/sciaschi/CBFD-Recompiled.git cbfd
-          cd cbfd && git log -1 --format='%H %cd'
+          sec "BananaPad tree (depth 3)"
+          (cd bp && find . -maxdepth 3 -not -path './.git*' | sort | head -500) >> "$R" 2>&1 || true
 
-      - name: Build (decomp -> N64Recomp -> host app)
-        working-directory: cbfd
-        run: ./build.sh "$RUNNER_TEMP/conker.z64"
+          sec "BananaPad patches: files touched"
+          (cd bp && ls -la patches 2>/dev/null; \
+           grep -h '^+++ ' patches/*.patch patches/*/*.patch 2>/dev/null | sort | uniq -c | sort -rn | head -150) >> "$R" 2>&1 || true
 
-      - name: Show build output
-        if: always()
-        working-directory: cbfd
-        run: |
-          ls -la host/build || true
-          find . -path ./conker -prune -o -name 'ConkerRecomp*' -print | head
+          sec "BananaPad pins and config (padforge/padmint/json)"
+          (cd bp && ls *.json 2>/dev/null; for f in *.json; do echo "--- $f"; head -120 "$f"; done) >> "$R" 2>&1 || true
 
-      - name: Remove ROM
-        if: always()
-        run: rm -f "$RUNNER_TEMP/conker.z64"
+          sec "BananaPad bootstrap script (first 220 lines)"
+          (cd bp && head -220 scripts/bootstrap-bananapad.sh) >> "$R" 2>&1 || true
+
+          sec "BananaPad iOS device build script"
+          (cd bp && cat scripts/build-bananapad-ios-device.sh | head -220) >> "$R" 2>&1 || true
+
+          sec "BananaPad scripts and docs listing"
+          (cd bp && ls -la scripts docs apple 2>/dev/null) >> "$R" 2>&1 || true
+
+          sec "BananaPad: references to upstream/RT64/runtime pins"
+          (cd bp && grep -rniE 'upstream|rt64|N64ModernRuntime|N64Recomp|commit' scripts/*.sh 2>/dev/null | head -120) >> "$R" 2>&1 || true
+
+          sec "CBFD commit and submodules"
+          (cd cbfd && git log -1 --format='%H %cd'; cat .gitmodules; git submodule status) >> "$R" 2>&1 || true
+
+          sec "CBFD tree (depth 2)"
+          (cd cbfd && find . -maxdepth 2 -not -path './.git*' -not -path './tools/*/*' -not -path './conker/*' | sort | head -300) >> "$R" 2>&1 || true
+
+          sec "CBFD recomp/ patches: size and files touched"
+          (cd cbfd && wc -l recomp/*.patch; \
+           grep -h '^+++ ' recomp/*.patch | sort -u | head -150) >> "$R" 2>&1 || true
+
+          sec "CBFD host/ tree"
+          (cd cbfd && find host -maxdepth 3 -type f | sort | head -300) >> "$R" 2>&1 || true
+
+          sec "CBFD host/CMakeLists.txt (first 250 lines)"
+          (cd cbfd && head -250 host/CMakeLists.txt) >> "$R" 2>&1 || true
+
+          sec "CBFD build.sh (if present)"
+          (cd cbfd && cat build.sh 2>/dev/null | head -200) >> "$R" 2>&1 || true
+
+          wc -c "$R"
+
+      - name: Upload report
+        uses: actions/upload-artifact@v4
+        with:
+          name: inspection-report
+          path: inspection.txt
+          retention-days: 3
 
