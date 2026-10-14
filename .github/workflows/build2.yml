@@ -57,7 +57,7 @@ jobs:
       - name: Install build tools
         run: |
           brew update
-          brew install cmake ninja jq python@3.11 rust gcc
+          brew install cmake ninja jq python@3.11 rust gcc ripgrep
           # README requires GNU cpp-16; check what Homebrew actually provides
           ls "$(brew --prefix)/bin" | grep -E '^cpp-' || true
 
