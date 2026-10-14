@@ -59,7 +59,8 @@ jobs:
         run: |
           python3 -m venv "$RUNNER_TEMP/venv"
           "$RUNNER_TEMP/venv/bin/pip" install --quiet gdown
-          "$RUNNER_TEMP/venv/bin/gdown" --id "$ROM_DRIVE_ID" \
+          "$RUNNER_TEMP/venv/bin/gdown" \
+              "https://drive.google.com/uc?id=$ROM_DRIVE_ID" \
               -O "$RUNNER_TEMP/dk64.z64"
           ls -l "$RUNNER_TEMP/dk64.z64"
           # Sanity check: a failed download is usually a small HTML page
