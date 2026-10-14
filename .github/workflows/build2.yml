@@ -33,6 +33,17 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v4
 
+      # If this repo only holds the workflow (no scripts/ folder), pull in
+      # the public BananaPad source so the build can run. Skipped once you
+      # have imported the full project into this repo.
+      - name: Fetch BananaPad source if missing
+        run: |
+          if [ ! -f scripts/check-prerequisites.sh ]; then
+            git clone --depth 1 https://github.com/chrissotraidis/bananapad "$RUNNER_TEMP/bananapad-src"
+            rsync -a --exclude '.git' --exclude '.github' "$RUNNER_TEMP/bananapad-src/" ./
+          fi
+          ls scripts
+
       - name: Select newest stable Xcode
         run: |
           XC=$(ls -d /Applications/Xcode_*.app | grep -vi beta | sort -V | tail -1)
