@@ -1,49 +1,30 @@
-# .github/workflows/build-bananapad.yml
+# .github/workflows/build-conker-recomp-macos.yml
 #
-# Milestone 1: reproduce BananaPad's one-command device build on a GitHub
-# macOS runner, starting from an ENCRYPTED ROM stored in a PRIVATE repo.
+# Milestone 2a: prove the existing community Conker recomp
+# (sciaschi/CBFD-Recompiled) builds on a GitHub macOS runner from your own
+# US ROM. This is a DESKTOP macOS build, not the iOS app: it just shows the
+# decomp -> N64Recomp -> RT64/Metal chain works in CI before we port it to the
+# BananaPad iOS shell.
 #
-# One-time setup:
-#   -> upload dk64.z64 to Google Drive
-#   -> share it as "Anyone with the link" (the runner has no Google login)
-#   -> copy the file ID from the link:
-#        https://drive.google.com/file/d/<FILE_ID>/view
-#   -> the ID is hardcoded below (fine for a private repo); to hide it,
-#      move it to a repo secret and use ${{ secrets.ROM_DRIVE_ID }}
-#   -> if the link is ever exposed, delete the file or turn sharing off
+# UNTESTED. Written from the project's README; expect to tweak.
 #
-# IMPORTANT: keep the repo PRIVATE and artifact retention short. The IPA
-# contains code translated from the game, and the ROM must never land in a
-# tracked path or a public artifact.
-#
-# UNTESTED: written from BananaPad's README. Expect to tweak runner image,
-# Xcode selection, and Homebrew packages on the first few runs.
+# Setup:
+#   -> upload your Conker US ROM to Google Drive (Anyone with the link)
+#      Required SHA-1: 4cbadd3c4e0729dec46af64ad018050eada4f47a
+#   -> the file ID is already filled in below
+#   -> keep this repo PRIVATE
 
-name: Build BananaPad (unsigned IPA)
+name: Build Conker recomp (macOS test)
 
 on:
   workflow_dispatch:
 
 jobs:
   build:
-    runs-on: macos-15          # Apple Silicon image; confirm in GitHub's runner-images list
-    timeout-minutes: 150       # README says the first build takes ~35 min
+    runs-on: macos-15
+    timeout-minutes: 180
 
     steps:
-      - name: Checkout
-        uses: actions/checkout@v4
-
-      # If this repo only holds the workflow (no scripts/ folder), pull in
-      # the public BananaPad source so the build can run. Skipped once you
-      # have imported the full project into this repo.
-      - name: Fetch BananaPad source if missing
-        run: |
-          if [ ! -f scripts/check-prerequisites.sh ]; then
-            git clone --depth 1 https://github.com/chrissotraidis/bananapad "$RUNNER_TEMP/bananapad-src"
-            rsync -a --exclude '.git' --exclude '.github' "$RUNNER_TEMP/bananapad-src/" ./
-          fi
-          ls scripts
-
       - name: Select newest stable Xcode
         run: |
           XC=$(ls -d /Applications/Xcode_*.app | grep -vi beta | sort -V | tail -1)
@@ -51,60 +32,45 @@ jobs:
           sudo xcode-select -s "$XC/Contents/Developer"
           xcodebuild -version
 
-      - name: Download Metal Toolchain (Xcode 26+ ships it separately)
+      - name: Download Metal Toolchain
         run: xcodebuild -downloadComponent MetalToolchain
 
       - name: Install build tools
         run: |
           brew update
-          brew install cmake ninja jq python@3.11 rust gcc ripgrep
-          # README requires GNU cpp-16; check what Homebrew actually provides
-          ls "$(brew --prefix)/bin" | grep -E '^cpp-' || true
+          brew install cmake ninja pkg-config sdl2 freetype jq python@3.11 ripgrep
 
-      # ROM comes from Google Drive into runner temp, never the workspace
-      # (BananaPad's check-repo-safety.sh rejects ROMs in tracked paths).
-      # The Drive file ID is hardcoded; the repo must stay private.
       - name: Download ROM from Google Drive
         env:
-          ROM_DRIVE_ID: 1o0VleUNoR2HZPM0JztcRsvnhYLru2dyc
+          ROM_DRIVE_ID: 1ZgP1dSW_YGs5EGy-55a0JI-I3-BPw0qR
         run: |
           python3 -m venv "$RUNNER_TEMP/venv"
           "$RUNNER_TEMP/venv/bin/pip" install --quiet gdown
           "$RUNNER_TEMP/venv/bin/gdown" \
               "https://drive.google.com/uc?id=$ROM_DRIVE_ID" \
-              -O "$RUNNER_TEMP/dk64.z64"
-          ls -l "$RUNNER_TEMP/dk64.z64"
-          # Sanity check: a failed download is usually a small HTML page
-          test "$(stat -f%z "$RUNNER_TEMP/dk64.z64")" -gt 10000000
-          # BananaPad expects a ROM that normalizes to SHA-1
-          # cf806ff2603640a748fca5026ded28802f1f4a50 (its script verifies this)
+              -O "$RUNNER_TEMP/conker.z64"
+          ls -l "$RUNNER_TEMP/conker.z64"
+          SHA=$(shasum -a 1 "$RUNNER_TEMP/conker.z64" | cut -d' ' -f1)
+          echo "ROM SHA-1: $SHA"
+          test "$SHA" = "4cbadd3c4e0729dec46af64ad018050eada4f47a"
 
-      - name: Check prerequisites
-        run: scripts/check-prerequisites.sh
-
-      - name: Build unsigned device IPA
+      - name: Clone CBFD-Recompiled (with submodules)
         run: |
-          scripts/bootstrap-bananapad.sh \
-            --rom "$RUNNER_TEMP/dk64.z64" \
-            --target device
+          git clone --recursive https://github.com/sciaschi/CBFD-Recompiled.git cbfd
+          cd cbfd && git log -1 --format='%H %cd'
 
-      - name: Upload IPA (private artifact, short retention)
-        uses: actions/upload-artifact@v4
-        with:
-          name: bananapad-unsigned-ipa
-          path: generated/packages/*.ipa
-          retention-days: 2
-          if-no-files-found: error
+      - name: Build (decomp -> N64Recomp -> host app)
+        working-directory: cbfd
+        run: ./build.sh "$RUNNER_TEMP/conker.z64"
 
-      - name: Upload validation receipt (no ROM data)
+      - name: Show build output
         if: always()
-        uses: actions/upload-artifact@v4
-        with:
-          name: bootstrap-receipt
-          path: generated/validation/bootstrap-last-run.json
-          retention-days: 2
-          if-no-files-found: ignore
+        working-directory: cbfd
+        run: |
+          ls -la host/build || true
+          find . -path ./conker -prune -o -name 'ConkerRecomp*' -print | head
 
-      - name: Remove decrypted ROM
+      - name: Remove ROM
         if: always()
-        run: rm -f "$RUNNER_TEMP/dk64.z64"
+        run: rm -f "$RUNNER_TEMP/conker.z64"
+
