@@ -50,12 +50,21 @@ jobs:
           sec "RT64: dry-run on CBFD's patched tools/rt64"
           patch --dry-run -p3 -f -d cbfd/tools/rt64 -i "$PWD/rt64-ios.patch" >> "$R" 2>&1 || true
 
-          # N64ModernRuntime hunks (a/lib/N64ModernRuntime/... -> strip 4)
+          # N64ModernRuntime hunks (a/lib/N64ModernRuntime/... -> strip 3)
           filterdiff -p1 -i 'lib/N64ModernRuntime/*' "$P" > runtime-ios.patch || true
           sec "N64ModernRuntime: files in BananaPad's iOS patch"
           grep '^+++ ' runtime-ios.patch >> "$R" || true
           sec "N64ModernRuntime: dry-run on CBFD's patched tools/N64ModernRuntime"
-          patch --dry-run -p4 -f -d cbfd/tools/N64ModernRuntime -i "$PWD/runtime-ios.patch" >> "$R" 2>&1 || true
+          patch --dry-run -p3 -f -d cbfd/tools/N64ModernRuntime -i "$PWD/runtime-ios.patch" >> "$R" 2>&1 || true
+
+          # Throwaway runner: apply for real so we can read the rejected hunks.
+          sec "RT64: rejected hunks (real apply)"
+          patch -p3 -f -d cbfd/tools/rt64 -i "$PWD/rt64-ios.patch" > /dev/null 2>&1 || true
+          find cbfd/tools/rt64 -name '*.rej' -exec sh -c 'echo "--- $1"; cat "$1"' _ {} \; >> "$R" 2>&1 || true
+
+          sec "N64ModernRuntime: rejected hunks (real apply)"
+          patch -p3 -f -d cbfd/tools/N64ModernRuntime -i "$PWD/runtime-ios.patch" > /dev/null 2>&1 || true
+          find cbfd/tools/N64ModernRuntime -name '*.rej' -exec sh -c 'echo "--- $1"; cat "$1"' _ {} \; >> "$R" 2>&1 || true
 
           # How far has upstream moved between the two pins?
           sec "RT64 drift: BananaPad pin -> CBFD pin (stat of Apple/Metal files)"
@@ -87,6 +96,18 @@ jobs:
           (cd cbfd && grep -rlE 'recompui|RmlUi|recompinput' host/src | sort) >> "$R" 2>&1 || true
           (cd cbfd && wc -l host/src/*.cpp | sort -rn | head -30) >> "$R" 2>&1 || true
 
+          sec "CBFD host/src/overlays.cpp (full)"
+          cat cbfd/host/src/overlays.cpp >> "$R" 2>&1 || true
+
+          sec "CBFD n64modernruntime.patch around the PROT_EXEC change"
+          sed -n '120,200p' cbfd/recomp/n64modernruntime.patch >> "$R" 2>&1 || true
+
+          sec "CBFD host/src/main.cpp: patching / overlay / hook references"
+          grep -nE 'overlay|mprotect|patch|hook|install_' cbfd/host/src/main.cpp | head -60 >> "$R" 2>&1 || true
+
+          sec "CBFD conker.toml hooks and patches (first 120 lines matching)"
+          grep -nE 'hook|patch|\[\[' cbfd/conker.toml | head -120 >> "$R" 2>&1 || true
+
           wc -c "$R"
 
       - name: Upload report
@@ -95,3 +116,4 @@ jobs:
           name: compat-report
           path: compat.txt
           retention-days: 3
+ 
